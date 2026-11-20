@@ -29,8 +29,10 @@ jobs:
             "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/$tarball"
           echo "${GITLEAKS_SHA256}  $RUNNER_TEMP/$tarball" | sha256sum -c -
           tar -xzf "$RUNNER_TEMP/$tarball" -C "$RUNNER_TEMP" gitleaks
-      - name: Scan full history
-        run: '"$RUNNER_TEMP/gitleaks" git --redact --verbose --exit-code 1 .'
+      # HEAD only: the checkout fetches every branch, and each branch is judged
+      # by its own PR, so a secret on one branch doesn't fail every other PR.
+      - name: Scan full history of the checked-out commit
+        run: '"$RUNNER_TEMP/gitleaks" git --redact --verbose --exit-code 1 --log-opts=HEAD .'
 
   vendor-files:
     name: vendor-files
