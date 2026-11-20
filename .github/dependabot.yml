@@ -1,0 +1,10 @@
+# Dependabot: keep SHA-pinned actions current; wait 7 days after a release
+# before proposing it, to skip short-lived malicious versions.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7

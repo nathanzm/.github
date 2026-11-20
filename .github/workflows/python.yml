@@ -1,0 +1,45 @@
+# Reusable workflow: Python format, lint, type check, and tests with a
+# 100% line and branch coverage floor. Expects requirements-dev.txt (pinned
+# tools) and pyproject.toml (tool config) in the working directory.
+name: python
+
+on:
+  workflow_call:
+    inputs:
+      python-version:
+        description: Python version to test with.
+        type: string
+        default: "3.14"
+      working-directory:
+        description: Directory holding pyproject.toml and requirements-dev.txt.
+        type: string
+        default: "."
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    name: python
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ inputs.python-version }}
+      - name: Install pinned dev tools
+        run: python -m pip install --disable-pip-version-check -r requirements-dev.txt
+      - name: Format
+        run: ruff format --check
+      - name: Lint and static analysis
+        run: ruff check
+      - name: Type check
+        run: mypy
+      # The floor is set here, not in the repo, so a repo can't lower it.
+      - name: Tests with coverage
+        run: pytest --cov --cov-branch --cov-report=term-missing --cov-fail-under=100

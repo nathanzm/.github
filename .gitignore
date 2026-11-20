@@ -1,0 +1,10 @@
+# AI-vendor-specific files: AGENTS.md is the only AI guidance file.
+CLAUDE.md
+.claude/
+GEMINI.md
+.gemini/
+.cursor/
+.cursorrules
+.aider*
+.windsurfrules
+.clinerules
