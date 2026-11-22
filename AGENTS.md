@@ -15,10 +15,10 @@ Default community health files and reusable GitHub Actions workflows for every r
 - Keep docs short and in the present tense; no history narration.
 
 ## Changing a workflow
+Callers use these workflows at `@main`, so a merged change reaches every repo at once. Test before merging:
 1. Run `actionlint` locally if it's available; CI runs it either way.
-2. Test the change in a scratch repo that calls the workflow at the branch's commit SHA, including one run that must fail (for example 99% coverage, or a fake secret).
-3. Merge, then tag a semver release (`vX.Y.Z`). Callers pin the release's commit SHA, and Dependabot proposes updates from the tags.
-4. A change that adds a check or makes one stricter is a minor release; one that breaks existing callers (renamed inputs or jobs) is a major release.
+2. Point a scratch repo's caller at the pull request's branch (`@<branch>`), and check one run that must pass and one that must fail (for example 99% coverage, or a fake secret). Point it back at `@main` after merging.
+3. Keep job names stable: callers' required checks are named `<caller job> / <job>`, so renaming a job breaks every caller's ruleset.
 
 ## Bumping pinned tools
 - Actions: Dependabot opens the PRs (7-day cooldown).
