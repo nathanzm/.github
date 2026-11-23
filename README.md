@@ -2,7 +2,7 @@
 
 Shared defaults for every repository under `nathanzm`:
 
-- **Security policy and contributing guide** (`SECURITY.md`, `CONTRIBUTING.md`), shown on every public repo that has none of its own.
+- **Security policy** (`SECURITY.md`) and a **contributing notice** (`CONTRIBUTING.md`: these repos don't take outside contributions), shown on every repo that has none of its own.
 - **Reusable CI workflows** that other repos call:
 
 | Workflow | Checks |
