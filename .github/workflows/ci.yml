@@ -1,4 +1,5 @@
-# CI for this repo: the baseline checks plus actionlint over every workflow.
+# CI for this repo: the same standards every caller runs, from this commit, so
+# a pull request here is checked by its own version of standards.yml.
 name: ci
 
 on:
@@ -11,8 +12,5 @@ permissions:
   contents: read
 
 jobs:
-  baseline:
-    uses: ./.github/workflows/baseline.yml
-
-  actionlint:
-    uses: ./.github/workflows/actionlint.yml
+  standards:
+    uses: ./.github/workflows/standards.yml

@@ -3,13 +3,14 @@
 Guidance for anyone, human or AI, working in this repository.
 
 ## What this repo is
-Default community health files and reusable GitHub Actions workflows for every repo owned by `nathanzm`. Other repos run this code in their CI, so a change here changes every caller's required checks. Treat it as security-critical.
+Default community health files and the reusable GitHub Actions workflow (`standards.yml`) for every repo owned by `nathanzm`. Other repos run this code in their CI, so a change here changes every caller's required checks. Treat it as security-critical.
 
 ## Rules
 - **Security first.** Every workflow declares `permissions: contents: read` at the top and widens per job only when a job truly needs it. Checkout always uses `persist-credentials: false`.
 - **Pin everything.** Third-party actions are pinned by full commit SHA, with the version in a trailing comment. Downloaded binaries are pinned by version and verified against a SHA-256 written in the workflow, never against a checksum file fetched at run time.
 - **No secrets, no `pull_request_target`.** Reusable workflows take no secrets.
-- **Coverage floors live here.** The 100% floor is set on the command line in `python.yml` so a calling repo can't lower it.
+- **Coverage floors live here.** The 100% floor is set on the command line in each gate of `standards.yml` so a calling repo can't lower it.
+- **Fail closed.** `detect` fails on code in a language with no gate, and `result` passes only when every gate that should run succeeded. A new gate gets an extension list in `detect`, a job with `if:` on its output, and a line in `result`.
 - **Vendor-neutral.** No AI-vendor-specific files (`CLAUDE.md`, `.claude/`, `GEMINI.md`, `.cursor/`, `.github/copilot-instructions.md`, and so on). This file is the only AI guidance.
 - File names: workflows and config files are `snake_case`. Text files use LF line endings (`.gitattributes`).
 - Keep docs short and in the present tense; no history narration.
@@ -18,7 +19,7 @@ Default community health files and reusable GitHub Actions workflows for every r
 Callers use these workflows at `@main`, so a merged change reaches every repo at once. Test before merging:
 1. Run `actionlint` locally if it's available; CI runs it either way.
 2. Point a scratch repo's caller at the pull request's branch (`@<branch>`), and check one run that must pass and one that must fail (for example 99% coverage, or a fake secret). Point it back at `@main` after merging.
-3. Keep job names stable: callers' required checks are named `<caller job> / <job>`, so renaming a job breaks every caller's ruleset.
+3. Keep the `result` job's name stable: it's every caller's only required check (`standards / result`), so renaming it breaks every caller's ruleset.
 
 ## Bumping pinned tools
 - Actions: Dependabot opens the PRs (7-day cooldown).

@@ -1,0 +1,318 @@
+# Reusable workflow: every required check for a calling repo, in one place.
+# `detect` finds the languages in the repo and fails on code in a language
+# with no gate here, so new code can't skip its checks. Each gate runs only
+# when its language is present, and `result` is the one required check: it
+# passes only when every gate that should have run passed.
+name: standards
+
+on:
+  workflow_call:
+    inputs:
+      exclude:
+        description: >-
+          Space-separated path prefixes that detection ignores (vendored or
+          generated code). Visible in the caller's ci.yml for review.
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+################################################################################
+#                                  Detection                                   #
+################################################################################
+
+  ##
+  # detect
+  #
+  # Lists the tracked files and finds which gated languages are present.
+  # Fails on code in a language with no gate, so new code can't skip checks.
+  #
+  # Args:
+  #   inputs.exclude (string): path prefixes to ignore
+  #
+  # Returns:
+  #   outputs.python (string): "true" if there's Python code
+  #   outputs.workflows (string): "true" if there are workflow files
+  ##
+  detect:
+    name: detect
+    runs-on: ubuntu-24.04
+    outputs:
+      python: ${{ steps.detect.outputs.python }}
+      workflows: ${{ steps.detect.outputs.workflows }}
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Detect languages
+        id: detect
+        env:
+          EXCLUDE: ${{ inputs.exclude }}
+        shell: python3 {0}
+        run: |
+          import os, subprocess, sys
+
+          # Code with a gate in this workflow: extensions and shebang interpreters.
+          GATED = {"python": ({".py", ".pyi"}, {"python", "python3"})}
+          # Code with no gate yet: present means fail until a gate is added.
+          UNGATED = {
+              ".sh", ".bash", ".zsh", ".ksh", ".c", ".h", ".cc", ".cpp", ".cxx",
+              ".hh", ".hpp", ".hxx", ".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx",
+              ".go", ".rs", ".java", ".kt", ".kts", ".scala", ".rb", ".cs",
+              ".swift", ".m", ".mm", ".php", ".pl", ".pm", ".lua", ".adb", ".ads",
+              ".dart", ".r", ".ps1", ".psm1", ".vb", ".fs", ".ex", ".exs", ".erl",
+              ".hs", ".clj", ".groovy", ".zig", ".nim",
+          }
+
+          def interpreter(path):
+              """
+              interpreter
+
+              Reads a file's shebang line and names its interpreter.
+
+              Args:
+                  path (str): The file, relative to the repo root.
+
+              Returns:
+                  str: The interpreter's name, or "" if there's no shebang.
+              """
+              if os.path.islink(path) or not os.path.isfile(path):
+                  return ""
+              with open(path, "rb") as f:
+                  line = f.readline(200)
+              if not line.startswith(b"#!"):
+                  return ""
+              words = line[2:].decode(errors="replace").split()
+              if words and os.path.basename(words[0]) == "env":
+                  words = [w for w in words[1:] if not w.startswith("-")]
+              return os.path.basename(words[0]) if words else ""
+
+          excluded = os.environ["EXCLUDE"].split()
+          listed = subprocess.run(["git", "ls-files", "-z"], check=True,
+                                  capture_output=True).stdout.decode().split("\0")
+          files = [f for f in listed if f and not f.startswith(tuple(excluded))]
+
+          found = {lang: False for lang in GATED}
+          ungated = []
+          for f in files:
+              ext = os.path.splitext(f)[1].lower()
+              shebang = "" if ext else interpreter(f)
+              lang = next((lang for lang, (exts, interps) in GATED.items()
+                           if ext in exts or shebang in interps), None)
+              if lang:
+                  found[lang] = True
+              elif ext in UNGATED or shebang:
+                  ungated.append(f)
+          workflows = any(f.startswith(".github/workflows/")
+                          and f.endswith((".yml", ".yaml")) for f in files)
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+              for lang, present in found.items():
+                  out.write(f"{lang}={str(present).lower()}\n")
+              out.write(f"workflows={str(workflows).lower()}\n")
+          print("Detected:", {**found, "workflows": workflows})
+          if ungated:
+              print("::error::Code in a language with no gate in nathanzm/.github "
+                    "standards.yml (add a gate, or exclude vendored code):")
+              print("\n".join(ungated))
+              sys.exit(1)
+
+################################################################################
+#                               Always-on gates                                #
+################################################################################
+
+  ##
+  # secrets
+  #
+  # Scans the checked-out commit's full history with gitleaks, installed
+  # from a pinned, checksum-verified release.
+  ##
+  secrets:
+    name: secrets
+    runs-on: ubuntu-24.04
+    env:
+      GITLEAKS_VERSION: 8.30.1
+      GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+    steps:
+      - name: Check out the repo with full history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install gitleaks (checksum-verified)
+        run: |
+          set -euo pipefail
+          tarball="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -fsSLo "$RUNNER_TEMP/$tarball" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/$tarball"
+          echo "${GITLEAKS_SHA256}  $RUNNER_TEMP/$tarball" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$tarball" -C "$RUNNER_TEMP" gitleaks
+      # HEAD only: the checkout fetches every branch, and each branch is judged
+      # by its own PR, so a secret on one branch doesn't fail every other PR.
+      - name: Scan full history of the checked-out commit
+        run: '"$RUNNER_TEMP/gitleaks" git --redact --verbose --exit-code 1 --log-opts=HEAD .'
+
+  ##
+  # vendor-files
+  #
+  # Fails on AI-vendor-specific files; AGENTS.md is the only AI guidance file.
+  ##
+  vendor-files:
+    name: vendor-files
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Reject AI-vendor-specific files (AGENTS.md is the only AI guidance file)
+        run: |
+          set -euo pipefail
+          banned='(^|/)(claude\.md|\.claude/|gemini\.md|\.gemini/|\.cursor/|\.cursorrules|\.aider|\.windsurfrules|\.clinerules)|^\.github/copilot-instructions\.md$'
+          if found=$(git ls-files | grep -iE "$banned"); then
+            echo "::error::AI-vendor-specific files are not allowed; put AI guidance in AGENTS.md:"
+            echo "$found"
+            exit 1
+          fi
+
+  ##
+  # dependency-review
+  #
+  # Fails a public repo's pull request that adds a dependency with a known
+  # vulnerability. GitHub Free offers it on public repos only.
+  ##
+  dependency-review:
+    name: dependency-review
+    if: github.event_name == 'pull_request' && !github.event.repository.private
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Review added dependencies
+        uses: actions/dependency-review-action@bbc44d14a204704ccc493733616cd1e93a0321ec # v5.0.1
+        with:
+          fail-on-severity: low
+
+################################################################################
+#                                Language gates                                #
+################################################################################
+
+  ##
+  # actionlint
+  #
+  # Lints the workflow files, running shellcheck on their run: steps, with a
+  # pinned, checksum-verified actionlint.
+  #
+  # Args:
+  #   needs.detect.outputs.workflows (string): runs only when "true"
+  ##
+  actionlint:
+    name: actionlint
+    needs: detect
+    if: needs.detect.outputs.workflows == 'true'
+    runs-on: ubuntu-24.04
+    env:
+      ACTIONLINT_VERSION: 1.7.12
+      ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install actionlint (checksum-verified)
+        run: |
+          set -euo pipefail
+          tarball="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          curl -fsSLo "$RUNNER_TEMP/$tarball" \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/$tarball"
+          echo "${ACTIONLINT_SHA256}  $RUNNER_TEMP/$tarball" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$tarball" -C "$RUNNER_TEMP" actionlint
+      - name: Lint workflows
+        run: '"$RUNNER_TEMP/actionlint" -color'
+
+  ##
+  # python
+  #
+  # Format, lint, type check, and tests at 100% line and branch coverage.
+  # Expects requirements-dev.txt (pinned tools) and pyproject.toml (tool
+  # config) in the repo root; see the README's Python setup.
+  #
+  # Args:
+  #   needs.detect.outputs.python (string): runs only when "true"
+  ##
+  python:
+    name: python
+    needs: detect
+    if: needs.detect.outputs.python == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.14"
+      - name: Install pinned dev tools
+        run: python -m pip install --disable-pip-version-check -r requirements-dev.txt
+      - name: Format
+        run: ruff format --check
+      - name: Lint and static analysis
+        run: ruff check
+      - name: Type check
+        run: mypy
+      # The floor is set here, not in the repo, so a repo can't lower it.
+      - name: Tests with coverage
+        run: pytest --cov --cov-branch --cov-report=term-missing --cov-fail-under=100
+
+################################################################################
+#                                    Result                                    #
+################################################################################
+
+  ##
+  # result
+  #
+  # The one required check. A gate passes only by succeeding when its
+  # language was detected, or by being skipped when it wasn't; detection and
+  # the always-on gates must succeed. A failed detect skips the gates, so it
+  # fails here.
+  #
+  # Args:
+  #   needs (object): every gate's result and detect's outputs
+  ##
+  result:
+    name: result
+    if: always()
+    needs: [detect, secrets, vendor-files, dependency-review, actionlint, python]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check every gate
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+          REVIEW_EXPECTED: ${{ github.event_name == 'pull_request' && !github.event.repository.private }}
+        shell: python3 {0}
+        run: |
+          import json, os, sys
+
+          needs = json.loads(os.environ["NEEDS"])
+          detected = needs["detect"]["outputs"]
+          expected = {
+              "detect": True,
+              "secrets": True,
+              "vendor-files": True,
+              "dependency-review": os.environ["REVIEW_EXPECTED"] == "true",
+              "actionlint": detected.get("workflows") == "true",
+              "python": detected.get("python") == "true",
+          }
+          bad = []
+          for job, want in expected.items():
+              got = needs[job]["result"]
+              ok = got == ("success" if want else "skipped")
+              print(f"{job}: {got} ({'expected' if want else 'not expected'})")
+              if not ok:
+                  bad.append(job)
+          if bad:
+              print(f"::error::Gates not passed: {', '.join(bad)}")
+              sys.exit(1)
