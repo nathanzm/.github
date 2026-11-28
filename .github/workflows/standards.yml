@@ -19,6 +19,23 @@ permissions:
   contents: read
 
 jobs:
+################################################################################
+#                                  Detection                                   #
+################################################################################
+
+  ##
+  # detect
+  #
+  # Lists the tracked files and finds which gated languages are present.
+  # Fails on code in a language with no gate, so new code can't skip checks.
+  #
+  # Args:
+  #   inputs.exclude (string): path prefixes to ignore
+  #
+  # Returns:
+  #   outputs.python (string): "true" if there's Python code
+  #   outputs.workflows (string): "true" if there are workflow files
+  ##
   detect:
     name: detect
     runs-on: ubuntu-24.04
@@ -26,7 +43,8 @@ jobs:
       python: ${{ steps.detect.outputs.python }}
       workflows: ${{ steps.detect.outputs.workflows }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check out the repo
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Detect languages
@@ -50,7 +68,17 @@ jobs:
           }
 
           def interpreter(path):
-              """Return the shebang's interpreter name, or '' if there is none."""
+              """
+              interpreter
+
+              Reads a file's shebang line and names its interpreter.
+
+              Args:
+                  path (str): The file, relative to the repo root.
+
+              Returns:
+                  str: The interpreter's name, or "" if there's no shebang.
+              """
               if os.path.islink(path) or not os.path.isfile(path):
                   return ""
               with open(path, "rb") as f:
@@ -92,6 +120,16 @@ jobs:
               print("\n".join(ungated))
               sys.exit(1)
 
+################################################################################
+#                               Always-on gates                                #
+################################################################################
+
+  ##
+  # secrets
+  #
+  # Scans the checked-out commit's full history with gitleaks, installed
+  # from a pinned, checksum-verified release.
+  ##
   secrets:
     name: secrets
     runs-on: ubuntu-24.04
@@ -99,7 +137,8 @@ jobs:
       GITLEAKS_VERSION: 8.30.1
       GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check out the repo with full history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -116,11 +155,17 @@ jobs:
       - name: Scan full history of the checked-out commit
         run: '"$RUNNER_TEMP/gitleaks" git --redact --verbose --exit-code 1 --log-opts=HEAD .'
 
+  ##
+  # vendor-files
+  #
+  # Fails on AI-vendor-specific files; AGENTS.md is the only AI guidance file.
+  ##
   vendor-files:
     name: vendor-files
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check out the repo
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Reject AI-vendor-specific files (AGENTS.md is the only AI guidance file)
@@ -133,16 +178,35 @@ jobs:
             exit 1
           fi
 
+  ##
+  # dependency-review
+  #
+  # Fails a public repo's pull request that adds a dependency with a known
+  # vulnerability. GitHub Free offers it on public repos only.
+  ##
   dependency-review:
     name: dependency-review
     if: github.event_name == 'pull_request' && !github.event.repository.private
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/dependency-review-action@bbc44d14a204704ccc493733616cd1e93a0321ec # v5.0.1
+      - name: Review added dependencies
+        uses: actions/dependency-review-action@bbc44d14a204704ccc493733616cd1e93a0321ec # v5.0.1
         with:
           fail-on-severity: low
 
-  # actionlint also runs shellcheck on run: steps.
+################################################################################
+#                                Language gates                                #
+################################################################################
+
+  ##
+  # actionlint
+  #
+  # Lints the workflow files, running shellcheck on their run: steps, with a
+  # pinned, checksum-verified actionlint.
+  #
+  # Args:
+  #   needs.detect.outputs.workflows (string): runs only when "true"
+  ##
   actionlint:
     name: actionlint
     needs: detect
@@ -152,7 +216,8 @@ jobs:
       ACTIONLINT_VERSION: 1.7.12
       ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check out the repo
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Install actionlint (checksum-verified)
@@ -166,18 +231,28 @@ jobs:
       - name: Lint workflows
         run: '"$RUNNER_TEMP/actionlint" -color'
 
+  ##
+  # python
+  #
+  # Format, lint, type check, and tests at 100% line and branch coverage.
   # Expects requirements-dev.txt (pinned tools) and pyproject.toml (tool
   # config) in the repo root; see the README's Python setup.
+  #
+  # Args:
+  #   needs.detect.outputs.python (string): runs only when "true"
+  ##
   python:
     name: python
     needs: detect
     if: needs.detect.outputs.python == 'true'
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check out the repo
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.14"
       - name: Install pinned dev tools
@@ -192,9 +267,21 @@ jobs:
       - name: Tests with coverage
         run: pytest --cov --cov-branch --cov-report=term-missing --cov-fail-under=100
 
-  # The one required check. A gate passes only by succeeding when its language
-  # was detected, or by being skipped when it wasn't; detection and the
-  # always-on gates must succeed. A failed detect skips the gates, so it fails here.
+################################################################################
+#                                    Result                                    #
+################################################################################
+
+  ##
+  # result
+  #
+  # The one required check. A gate passes only by succeeding when its
+  # language was detected, or by being skipped when it wasn't; detection and
+  # the always-on gates must succeed. A failed detect skips the gates, so it
+  # fails here.
+  #
+  # Args:
+  #   needs (object): every gate's result and detect's outputs
+  ##
   result:
     name: result
     if: always()
